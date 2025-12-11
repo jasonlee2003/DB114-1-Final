@@ -11,7 +11,7 @@ with open(html_path, "r", encoding="utf-8") as f:
 soup = BeautifulSoup(html, "html.parser")
 
 # 2. Firebase 初始化（用你現在這個專案）
-url = "https://db114-1-final-9c6eb-default-rtdb.asia-southeast1.firebasedatabase.app/"
+url = "https://db114-1-final-9c6eb-default-rtdb.asia-southeast1.firebasedatabase.app/" ###############設定你自己的 Firebase URL################################################
 fb = firebase.FirebaseApplication(url, None)
 
 # 3. 抓出每一封信（我們自己做的 <div role="option" aria-label="...">）

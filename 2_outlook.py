@@ -11,7 +11,7 @@ import html  # 用來 escape 文字
 
 # ========= 1. 啟動瀏覽器 & 請你登入 =========
 options = Options()
-options.add_argument(r"--user-data-dir=C:\chromedriver\user1")  # 你原本的 profile
+options.add_argument(r"--user-data-dir=C:\chromedriver\user1")  # 設定你自己的chrome使用者資料路徑
 
 driver = webdriver.Chrome(options=options)
 driver.get("https://outlook.office.com/mail/0/inbox")
