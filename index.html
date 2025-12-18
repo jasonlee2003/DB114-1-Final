@@ -1,0 +1,456 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8" />
+  <title>校園公告信查詢系統</title>
+  <style>
+    body {
+      font-family: "Microsoft JhengHei", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      margin: 0;
+      padding: 0;
+      background: #f5f5f5;
+    }
+    header {
+      background: #1976d2;
+      color: #fff;
+      padding: 16px 24px;
+    }
+    header h1 {
+      margin: 0;
+      font-size: 24px;
+    }
+    header p {
+      margin: 4px 0 0;
+      font-size: 13px;
+      opacity: 0.8;
+    }
+    main {
+      padding: 16px 24px 40px;
+    }
+    .filters {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      align-items: center;
+      background: #fff;
+      padding: 12px 16px;
+      border-radius: 6px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+      margin-bottom: 12px;
+    }
+    .filter-group {
+      display: flex;
+      flex-direction: column;
+      font-size: 13px;
+    }
+    .filter-group label {
+      margin-bottom: 4px;
+    }
+    .filter-group select {
+      min-width: 140px;
+      padding: 4px 6px;
+      font-size: 13px;
+    }
+    button {
+      padding: 6px 12px;
+      font-size: 13px;
+      cursor: pointer;
+      border-radius: 4px;
+      border: 1px solid #ccc;
+      background: #eee;
+    }
+    button:hover {
+      background: #e0e0e0;
+    }
+    #status {
+      margin: 8px 0 4px;
+      font-size: 13px;
+      color: #555;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      background: #fff;
+      border-radius: 6px;
+      overflow: hidden;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+      font-size: 13px;
+    }
+    thead {
+      background: #e3f2fd;
+    }
+    th, td {
+      padding: 6px 8px;
+      border-bottom: 1px solid #eee;
+      vertical-align: top;
+    }
+    th {
+      text-align: left;
+      white-space: nowrap;
+    }
+    tbody tr:nth-child(even) {
+      background: #fafafa;
+    }
+    .mono {
+      font-family: Consolas, Menlo, monospace;
+    }
+    .subject-cell {
+      max-width: 520px;
+      word-break: break-all;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>校園公告信查詢系統</h1>
+    <p>直接從 Firebase Realtime Database 讀取公告 E-mail，依「月份 / 寄件單位 / 主題類型 / 發送時段」動態篩選。</p>
+  </header>
+
+  <main>
+    <div class="filters">
+      <div class="filter-group">
+        <label for="monthSelect">月份</label>
+        <select id="monthSelect">
+          <option value="">全部</option>
+        </select>
+      </div>
+
+      <div class="filter-group">
+        <label for="unitSelect">寄件單位</label>
+        <select id="unitSelect">
+          <option value="">全部</option>
+        </select>
+      </div>
+
+      <div class="filter-group">
+        <label for="topicSelect">主題類型</label>
+        <select id="topicSelect">
+          <option value="">全部</option>
+        </select>
+      </div>
+
+      <div class="filter-group">
+        <label for="hourSelect">發送時段（小時）</label>
+        <select id="hourSelect">
+          <option value="">全部</option>
+        </select>
+      </div>
+
+      <div class="filter-group" style="margin-left:auto;">
+        <label>&nbsp;</label>
+        <button id="resetBtn">清除條件</button>
+      </div>
+    </div>
+
+    <div id="status">尚未載入資料…</div>
+
+    <table>
+      <thead>
+        <tr>
+          <th>日期字串</th>
+          <th>月份</th>
+          <th>時</th>
+          <th>寄件單位</th>
+          <th>主題類型</th>
+          <th>適用對象</th>
+          <th>寄件人</th>
+          <th>主旨 / 摘要</th>
+        </tr>
+      </thead>
+      <tbody id="tableBody">
+        <tr><td colspan="8">資料載入中…</td></tr>
+      </tbody>
+    </table>
+  </main>
+
+  <script>
+    // ---- Firebase REST URL ----
+    const DB_URL =
+      "https://db114-1-final-9c6eb-default-rtdb.asia-southeast1.firebasedatabase.app/email.json";
+
+    // ---- 全域資料 ----
+    let records = [];        // 原始 + 解析後的資料
+    let months = new Set();
+    let units = new Set();
+    let topicTypes = new Set();
+    let hours = new Set();
+
+    const monthSelect = document.getElementById("monthSelect");
+    const unitSelect = document.getElementById("unitSelect");
+    const topicSelect = document.getElementById("topicSelect");
+    const hourSelect = document.getElementById("hourSelect");
+    const tableBody = document.getElementById("tableBody");
+    const statusEl = document.getElementById("status");
+    const resetBtn = document.getElementById("resetBtn");
+
+    // ============= 解析工具：照 analysis.py 的邏輯 =============
+
+    // 1. 日期：2025/12/18、2025-12-18、2025年12月18日
+    function parseDate(text) {
+      if (!text) return null;
+      const s = String(text);
+
+      // 2025/12/18 or 2025-12-18
+      let m = s.match(/(\d{4}[\/-]\d{1,2}[\/-]\d{1,2})/);
+      if (m) {
+        const parts = m[1].replace(/-/g, "/").split("/");
+        const y = parseInt(parts[0], 10);
+        const mo = parseInt(parts[1], 10);
+        const d = parseInt(parts[2], 10);
+        const dt = new Date(y, mo - 1, d);
+        if (!isNaN(dt.getTime())) return dt;
+      }
+
+      // 2025年12月18日
+      m = s.match(/(\d{4}年\d{1,2}月\d{1,2}日)/);
+      if (m) {
+        const nums = m[1].match(/\d+/g);
+        if (nums && nums.length === 3) {
+          const y = parseInt(nums[0], 10);
+          const mo = parseInt(nums[1], 10);
+          const d = parseInt(nums[2], 10);
+          const dt = new Date(y, mo - 1, d);
+          if (!isNaN(dt.getTime())) return dt;
+        }
+      }
+      return null;
+    }
+
+    // 2. 時：抓第一個 HH:MM 當作寄信時間
+    function parseHour(text) {
+      if (!text) return null;
+      const s = String(text);
+      const m = s.match(/(\d{1,2}):(\d{2})/);
+      if (!m) return null;
+      const h = parseInt(m[1], 10);
+      if (h < 0 || h > 23) return null;
+      return h;
+    }
+
+    // 3. 寄件單位
+    function extractUnit(text) {
+      if (!text) return "未知";
+      const s = String(text);
+
+      if (s.includes("長庚大學公告系統")) {
+        const m = s.match(/長庚大學公告系統\s*【([^】]+)】/);
+        if (m) return m[1];
+        return "公告系統(未明單位)";
+      }
+
+      const m2 = s.match(/長庚大學【([^】]+)】/);
+      if (m2) return m2[1];
+
+      if (s.includes("@cgu.edu.tw")) return "校內個人/老師";
+      return "外部單位/廠商";
+    }
+
+    // 4. 主題類型
+    const TOPIC_PATTERNS = {
+      "演講/講座": /演講|講座|speech|talk|seminar|workshop|work shop/i,
+      "徵才/招募": /徵才|招募|recruit|招考|誠徵|聘任/i,
+      "活動/競賽": /活動|比賽|競賽|展覽|嘉年華|festival|camp/i,
+      "課程/教學": /課程|修課|選課|加退選|教學意見|EMI|教學資源/i,
+      "系所/學院公告": /學系公告|系公告|學系|學程|學院/i,
+      "行政/校務公告": /停電|維護|防火牆|網路|校務|調整|管制|安全性|防疫|交通|班次|機房|資訊中心公告|總務處/i,
+      "獎助學金/補助": /獎學金|補助|經費|補貼|助學金/i
+    };
+
+    function classifyTopic(text) {
+      if (!text) return "其他";
+      const s = String(text);
+      for (const [topic, pat] of Object.entries(TOPIC_PATTERNS)) {
+        if (pat.test(s)) return topic;
+      }
+      return "其他";
+    }
+
+    // 5. 適用對象
+    const AUDIENCE_PATTERNS = {
+      "大一新生": /大一|一年級|新生/,
+      "全校師生": /全校教職員生|全校教職員工生|全校師生|全校學生|全體教職員生|全體學生/,
+      "研究生": /碩士班|博士班|研究生|研究所/,
+      "特定系所/學院": /學系公告|系公告|學系|學程|學院|醫學系|護理系|資訊工程學系|資工系/,
+      "國際學生/外籍生": /國際學生|外國學生|外籍生|International Students|EMI/
+    };
+
+    function classifyAudience(text) {
+      if (!text) return "其他/未明";
+      const s = String(text);
+      for (const [label, pat] of Object.entries(AUDIENCE_PATTERNS)) {
+        if (pat.test(s)) return label;
+      }
+      if (s.includes("長庚大學公告系統")) return "全校或特定對象(未明)";
+      return "其他/未明";
+    }
+
+    // ============= 資料載入 + 轉換 =============
+
+    async function loadData() {
+      statusEl.textContent = "從 Firebase 載入資料中…";
+
+      try {
+        const res = await fetch(DB_URL);
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        const json = await res.json() || {};
+
+        const values = Object.values(json);
+        records = values.map((item) => {
+          const sender  = (item.sender  || "unknown").trim();
+          const subject = (item.subject || "").trim();
+          const dateStr = (item.date    || "unknown").trim();
+          const snippet = (item.snippet || "").trim();
+
+          const textForParse = subject + " " + snippet + " " + dateStr;
+
+          const dt   = parseDate(textForParse);
+          const hour = parseHour(textForParse);
+          const month = dt
+            ? dt.getFullYear().toString() + "-" + String(dt.getMonth() + 1).padStart(2, "0")
+            : "未知";
+
+          const unit = extractUnit(textForParse);
+          const topicType = classifyTopic(textForParse);
+          const audience = classifyAudience(textForParse);
+
+          // 供 UI 使用
+          months.add(month);
+          units.add(unit);
+          topicTypes.add(topicType);
+          if (hour !== null && hour !== undefined && !isNaN(hour)) {
+            hours.add(hour);
+          }
+
+          return {
+            sender,
+            subject,
+            dateStr,
+            snippet,
+            month,
+            hour,
+            unit,
+            topicType,
+            audience
+          };
+        });
+
+        buildFilterOptions();
+        renderTable();
+        statusEl.textContent = `已載入 ${records.length} 封郵件（月份= ${months.size} 種，單位= ${units.size} 個）`;
+      } catch (err) {
+        console.error(err);
+        statusEl.textContent = "載入資料失敗：" + err.message;
+        tableBody.innerHTML = "<tr><td colspan='8'>載入資料失敗，請查看 Console。</td></tr>";
+      }
+    }
+
+    // ============= 建立下拉選單選項 =============
+
+    function addOptions(select, values, formatter = (v) => v) {
+      const sorted = Array.from(values).sort();
+      for (const v of sorted) {
+        const opt = document.createElement("option");
+        opt.value = v === "未知" ? "" : v; // 「未知」不當作可選條件
+        opt.textContent = formatter(v);
+        if (v === "未知") {
+          opt.textContent = "無法判斷 / 未知";
+          opt.value = "未知";
+        }
+        select.appendChild(opt);
+      }
+    }
+
+    function buildFilterOptions() {
+      // 月份
+      monthSelect.innerHTML = "<option value=''>全部</option>";
+      const monthValues = new Set(months);
+      monthValues.delete("未知");
+      addOptions(monthSelect, monthValues);
+
+      // 寄件單位
+      unitSelect.innerHTML = "<option value=''>全部</option>";
+      addOptions(unitSelect, units);
+
+      // 主題類型
+      topicSelect.innerHTML = "<option value=''>全部</option>";
+      addOptions(topicSelect, topicTypes);
+
+      // 小時
+      hourSelect.innerHTML = "<option value=''>全部</option>";
+      const sortedHours = Array.from(hours).sort((a, b) => a - b);
+      for (const h of sortedHours) {
+        const opt = document.createElement("option");
+        opt.value = String(h);
+        opt.textContent = `${String(h).padStart(2, "0")} 時`;
+        hourSelect.appendChild(opt);
+      }
+    }
+
+    // ============= 套用篩選 + 畫表格 =============
+
+    function renderTable() {
+      const monthFilter = monthSelect.value;
+      const unitFilter = unitSelect.value;
+      const topicFilter = topicSelect.value;
+      const hourFilter = hourSelect.value;
+
+      const filtered = records.filter((r) => {
+        if (monthFilter && r.month !== monthFilter) return false;
+        if (unitFilter && r.unit !== unitFilter) return false;
+        if (topicFilter && r.topicType !== topicFilter) return false;
+        if (hourFilter !== "" && hourFilter !== null && hourFilter !== undefined) {
+          if (r.hour === null || r.hour === undefined) return false;
+          if (String(r.hour) !== hourFilter) return false;
+        }
+        return true;
+      });
+
+      if (filtered.length === 0) {
+        tableBody.innerHTML = "<tr><td colspan='8'>目前條件下沒有資料。</td></tr>";
+        return;
+      }
+
+      const rows = filtered.map((r) => {
+        const dateDisp = r.dateStr || "unknown";
+        const monthDisp = r.month || "未知";
+        const hourDisp = (r.hour === null || r.hour === undefined || isNaN(r.hour))
+          ? "未知"
+          : String(r.hour).padStart(2, "0");
+
+        return `
+          <tr>
+            <td class="mono">${dateDisp}</td>
+            <td>${monthDisp}</td>
+            <td>${hourDisp}</td>
+            <td>${r.unit}</td>
+            <td>${r.topicType}</td>
+            <td>${r.audience}</td>
+            <td>${r.sender}</td>
+            <td class="subject-cell">${r.subject || "(無主旨)"}<br><span style="color:#666;">${r.snippet}</span></td>
+          </tr>
+        `;
+      });
+
+      tableBody.innerHTML = rows.join("");
+    }
+
+    // ============= 事件綁定 =============
+
+    monthSelect.addEventListener("change", renderTable);
+    unitSelect.addEventListener("change", renderTable);
+    topicSelect.addEventListener("change", renderTable);
+    hourSelect.addEventListener("change", renderTable);
+
+    resetBtn.addEventListener("click", () => {
+      monthSelect.value = "";
+      unitSelect.value = "";
+      topicSelect.value = "";
+      hourSelect.value = "";
+      renderTable();
+    });
+
+    // ============= 啟動 =============
+    loadData();
+  </script>
+</body>
+</html>
